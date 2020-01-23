@@ -1,6 +1,6 @@
 {
   "name": "@rocketbase/rollup-plugin-sequential",
-  "version": "0.0.0-development",
+  "version": "0.0.0",
   "description": "Run commands after building",
   "main": "dist/RollupPluginSequential.js",
   "module": "dist/RollupPluginSequential.esm.js",
