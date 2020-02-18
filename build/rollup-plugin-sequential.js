@@ -1,5 +1,14 @@
 /* eslint-disable */
-const allHooks = [
+/**
+ * RollupPluginSequential (@rocketbase/rollup-plugin-sequential v0.0.0)
+ * Run commands after building
+ * https://github.com/rocketbase-io/rollup-plugin-sequential#readme
+ * (c) 2020 Rocketbase Team <team@rocketbase.io>
+ * @license MIT
+ */
+import { fromPairs, uniq, keys } from 'lodash';
+
+const hooks = [
   { name: "augmentChunkHash", kind: ["sync", "sequential"], phase: "generate" },
   { name: "banner", kind: ["async", "parallel"], phase: "generate" },
   { name: "buildEnd", kind: ["async", "parallel"], phase: "build" },
@@ -23,34 +32,58 @@ const allHooks = [
   { name: "writeBundle", kind: ["async", "parallel"], phase: "generate" }
 ];
 
-export default function(plugins = [], { once = false } = {}) {
-  let hooks = [];
-  plugins.forEach(
-    plugin => (hooks = [...new Set(hooks.concat(Object.keys(plugin)))])
-  );
-  hooks = hooks.filter(hook => allHooks.find(it => it.name === hook));
+function combinedHooks(plugins) {
+  const allKeys = uniq(plugins.reduce((all, one) => all.concat(keys(one)), []));
+  return fromPairs(allKeys.map(key => [key, hooks.find(hook => hook.name === key)]).filter(([, hook]) => !!hook));
+}
+
+function relevantPlugins(hook, plugins) {
+  return plugins.filter(plugin => hook in plugin && plugin[hook]);
+}
+
+function combineAsyncFunctions(name, plugins, once) {
+  let ranBefore = false;
+  return (...params) => {
+    if (once && ranBefore)
+      return;
+    ranBefore = true;
+    return plugins.reduce((before, plugin) => {
+      return before.then(() => plugin[name].call(plugin, ...params));
+    }, Promise.resolve());
+  };
+}
+
+function combineSyncFunctions(name, plugins, once) {
+  let ranBefore = false;
+  let lastResult = undefined;
+  return (...params) => {
+    if (once && ranBefore)
+      return lastResult;
+    ranBefore = true;
+    plugins.forEach(plugin => (lastResult = plugin[name].call(plugin, ...params)));
+    return lastResult;
+  };
+}
+
+function combineFunctions(hook, plugins, once) {
+  if (hook.kind.indexOf("async") !== -1)
+    return combineAsyncFunctions(hook.name, plugins, once);
+  else
+    return combineSyncFunctions(hook.name, plugins, once);
+}
+
+function buildCombinedPlugin(plugins, once) {
+  const hooks = combinedHooks(plugins);
   const merged = {};
-  const before = [];
-  for (let hook of hooks)
-    merged[hook] = (...params) => {
-      if (before.find(it => it === hook) && once) return;
-      before.push(hook);
-      const relevant = plugins.filter(plugin => hook in plugin);
-      const spec = allHooks.find(it => it.name === hook);
-      let lastResult = undefined;
-      function next() {
-        const plugin = relevant.shift();
-        if (!plugin) return lastResult;
-        if (spec.kind.find(it => it === "async"))
-          return Promise.resolve(
-            (plugin[hook].call && plugin[hook].call(plugin, ...params)) ||
-              plugin[hook]
-          )
-            .then(res => (lastResult = res))
-            .then(next);
-        else return (lastResult = plugin[hook]), next();
-      }
-      return next();
-    };
+  for (const hook of keys(hooks)) {
+    const relevant = relevantPlugins(hook, plugins);
+    merged[hook] = combineFunctions(hooks[hook], relevant, once);
+  }
   return merged;
 }
+
+function main (plugins, { once = false } = {}) {
+  return buildCombinedPlugin(plugins, once);
+}
+
+export default main;
